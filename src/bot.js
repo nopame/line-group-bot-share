@@ -1,6 +1,7 @@
 // ตัวรับ event จาก LINE — คุยแชทส่วนตัว (1:1) เท่านั้น
 // แยกเป็น factory รับ client / db / ai / media จากข้างนอก เทสจะได้ส่งของปลอมเข้ามาได้โดยไม่ต้องต่อ LINE จริง
 const { BOT, SELF, EMOJI, say } = require('./branding');
+const { imageCommand, HELP: IMAGE_HELP } = require('./image-generation');
 
 const MEDIA_TYPES = ['image', 'audio', 'video', 'file'];
 
@@ -39,19 +40,20 @@ function greeting(env = process.env) {
   );
 }
 
-function createBot({ client, db = require('./db'), ai = require('./ai'), media = require('./media'), env = process.env }) {
+function createBot({ client, db = require('./db'), ai = require('./ai'), media = require('./media'), env = process.env, images }) {
+  images ??= require('./image-generation').createImageService({ env, db });
   const textMsg = (t) => ({ type: 'text', text: say(t).slice(0, 4900) });
 
   // ตอบด้วย replyToken (ฟรี) — หมดอายุ/ใช้ไม่ได้ ค่อยถอยไป push (กินโควต้าฟรี 300/เดือน) จะได้ไม่เงียบหาย
   async function send(replyToken, to, t) {
     try {
-      await client.replyMessage({ replyToken, messages: [textMsg(t)] });
+      await client.replyMessage({ replyToken, messages: Array.isArray(t) ? t : [textMsg(t)] });
       return 'reply';
     } catch (e) {
       console.error('[reply]', e.message);
       if (!to) return 'fail';
       try {
-        await client.pushMessage({ to, messages: [textMsg(t)] });
+        await client.pushMessage({ to, messages: Array.isArray(t) ? t : [textMsg(t)] });
         return 'push';
       } catch (e2) {
         console.error('[push]', e2.message);
@@ -122,6 +124,7 @@ function createBot({ client, db = require('./db'), ai = require('./ai'), media =
 
     if (event.type !== 'message') return 'ignored';
     const msg = event.message;
+    const imagePrompt = msg.type === 'text' ? imageCommand(msg.text) : null;
     await rememberUser(userId);
 
     // --- เพดานต่อวัน: ครบแล้วตอบสั้นๆ ไม่เรียก AI ---
@@ -133,7 +136,7 @@ function createBot({ client, db = require('./db'), ai = require('./ai'), media =
 
     // จุดกำลังพิมพ์... ให้คนรู้ว่าบอทรับเรื่องแล้ว (สื่อใช้เวลานานกว่า)
     await Promise.resolve(
-      client.showLoadingAnimation?.({ chatId: userId, loadingSeconds: MEDIA_TYPES.includes(msg.type) ? 60 : 20 }),
+      client.showLoadingAnimation?.({ chatId: userId, loadingSeconds: MEDIA_TYPES.includes(msg.type) || imagePrompt !== null ? 60 : 20 }),
     ).catch(() => {});
 
     // --- เก็บข้อความ (สื่อ = อ่านก่อนแล้วเขียนทับ placeholder) ---
@@ -144,6 +147,35 @@ function createBot({ client, db = require('./db'), ai = require('./ai'), media =
       if (MEDIA_TYPES.includes(msg.type)) {
         const read = await media.readMedia(msg);
         if (read) db.updateMessageText(rowId, read);
+      }
+    }
+
+    if (imagePrompt !== null) {
+      if (!imagePrompt) {
+        await send(event.replyToken, userId, IMAGE_HELP);
+        return 'image_help';
+      }
+      try {
+        const result = await images.generate(imagePrompt, { userId, messageId: msg.id });
+        if (result.status === 'duplicate') return 'ignored';
+        if (result.status !== 'generated') {
+          const answers = {
+            limit: 'วันนี้ถึงจำนวนครั้งสร้างภาพที่กำหนดแล้วครับ ลองใหม่พรุ่งนี้ได้ครับ',
+            busy: 'กำลังสร้างภาพก่อนหน้าให้คุณอยู่ครับ รอภาพนั้นเสร็จก่อนนะครับ',
+            too_long: 'กรุณาย่อรายละเอียดภาพให้ไม่เกิน 2,000 ตัวอักษรครับ',
+            disabled: 'ขณะนี้ปิดบริการสร้างภาพชั่วคราวครับ',
+          };
+          await send(event.replyToken, userId, answers[result.status] || 'ยังสร้างภาพไม่ได้ครับ ลองใหม่ภายหลังครับ');
+          return `image_${result.status}`;
+        }
+        const delivered = await send(event.replyToken, userId, [textMsg('สร้างภาพให้แล้วครับ ภาพนี้สร้างโดย AI เป็นภาพจำลอง ไม่ใช่ภาพยืนยันสินค้าจริงครับ'), result.message]);
+        if (delivered === 'fail') return 'image_delivery_error';
+        db.logMessage(userId, 'bot', null, 'generated_image', `[ภาพที่สร้างโดย AI] ${imagePrompt}`);
+        return 'image_generated';
+      } catch (e) {
+        console.error('[image]', e.message);
+        await send(event.replyToken, userId, 'ขอโทษครับ สร้างภาพครั้งนี้ไม่สำเร็จ อาจเกิดจากบริการไม่พร้อม เครดิตไม่พอ หรือคำขอไม่ผ่านเงื่อนไข กรุณาลองใหม่ภายหลังครับ');
+        return 'image_error';
       }
     }
 
