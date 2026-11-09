@@ -23,7 +23,23 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, id);
 CREATE INDEX IF NOT EXISTS idx_messages_lineid ON messages(line_msg_id);
+CREATE TABLE IF NOT EXISTS image_requests (
+  message_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  ts TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_image_requests_time ON image_requests(ts);
 `);
+
+// Reserve before calling the paid API. Failed attempts count too, so retries cannot bypass limits.
+const reserveImageRequest = db.transaction((userId, messageId, userLimit, totalLimit) => {
+  if (db.prepare('SELECT 1 FROM image_requests WHERE message_id = ?').get(messageId)) return 'duplicate';
+  const counts = db.prepare(`SELECT count(*) total, coalesce(sum(user_id = ?), 0) personal
+    FROM image_requests WHERE date(ts, '+7 hours') = date('now', '+7 hours')`).get(userId);
+  if (counts.personal >= userLimit || counts.total >= totalLimit) return 'limit';
+  db.prepare('INSERT INTO image_requests (message_id, user_id) VALUES (?, ?)').run(messageId, userId);
+  return 'reserved';
+});
 
 // ---------- users ----------
 function upsertUser(id, displayName) {
@@ -79,4 +95,5 @@ module.exports = {
   deleteByLineMsgId,
   recentMessages,
   userMessagesToday,
+  reserveImageRequest,
 };

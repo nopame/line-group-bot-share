@@ -7,6 +7,7 @@ const { db } = require('./db');
 const { createBot } = require('./bot');
 const { BOT } = require('./branding');
 const brief = require('./brief');
+const { imageHandler, imageDirectory, cleanImages } = require('./image-generation');
 
 // เตือนค่าที่ยังไม่ได้ตั้ง แต่ไม่ปิดเซิร์ฟเวอร์ (ลองบูตในเครื่องก่อนผูก LINE ได้)
 const missing = ['LINE_CHANNEL_ACCESS_TOKEN', 'LINE_CHANNEL_SECRET', 'OPENROUTER_API_KEY'].filter((k) => !process.env[k]);
@@ -43,6 +44,12 @@ app.use((err, _req, res, next) => {
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+// Random bearer URLs let LINE fetch pictures; files expire after 24 hours.
+app.get('/generated/:file', imageHandler());
+const imageCleanup = setInterval(() => {
+  try { cleanImages(imageDirectory()); } catch (e) { console.error('[image-cleanup]', e.code || 'failed'); }
+}, 60 * 60 * 1000);
+imageCleanup.unref();
 
 // ดาวน์โหลดไฟล์ฐานข้อมูลไว้สำรอง (bin/backup-db.sh เรียกทุกคืน) — ต้องมี ADMIN_KEY
 app.get('/admin/backup', (req, res) => {
