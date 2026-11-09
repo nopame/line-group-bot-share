@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "chat": "node scripts/try-chat.js",
-    "test": "node test/run.js",
+    "test": "node test/run.js && node --test test/image-generation.test.js",
     "backup": "bash bin/backup-db.sh"
   },
   "keywords": [
@@ -26,7 +26,8 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "openai": "^6.47.0",
-    "pdf-parse": "^1.1.4"
+    "pdf-parse": "^1.1.4",
+    "sharp": "^0.35.5"
   },
   "engines": {
     "node": ">=20"
